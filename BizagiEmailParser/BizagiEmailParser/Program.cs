@@ -16,6 +16,7 @@ using takeda.bizagi.connector;
 
 namespace BizagiEmailParser
 {
+    //Change in Requirement
     class Program
     {
         private static readonly ILog Log =
@@ -32,10 +33,11 @@ namespace BizagiEmailParser
         static string bizagiDomain = ConfigurationManager.AppSettings["bizagiDomain"];
         static string bizagiProcessName = ConfigurationManager.AppSettings["bizagiProcessName"];
         static string bizagiEntityName = ConfigurationManager.AppSettings["bizagiEntityName"];
-        static string bizagiEmailSubjectColumnName = ConfigurationManager.AppSettings["bizagiEmailSubjectColumnName"];
-        static string bizagiEmailBodyCOlumnName = ConfigurationManager.AppSettings["bizagiEmailBodyCOlumnName"];
+        static string bizagiEmailQuestionColumnName = ConfigurationManager.AppSettings["bizagiEmailQuestionColumnName"];
+        static string bizagiEmailCommentColumnName = ConfigurationManager.AppSettings["bizagiEmailCommentColumnName"];
         static string bizagiEmailFileAttributeName = ConfigurationManager.AppSettings["bizagiEmailFileAttributeName"];
         static string readMessagesFilterAccount = ConfigurationManager.AppSettings["readMessagesFilterAccount"];
+        static string activityName = ConfigurationManager.AppSettings["activityName"];
         static bool newMessageSatisfiesCondition = false;
         static uint newMessageUint;
         static MailMessage msg;
@@ -54,22 +56,22 @@ namespace BizagiEmailParser
                     Log.Debug("Connected Successfully");
                     EmptyTemporatyMailFolder();
                     var unreadMessages = GetUnreadFilteredMailMessages();
-                    if (unreadMessages.Count() > 1)
+                    if (unreadMessages.Count() > 0)
                     {
                         Console.WriteLine("\nFound " + unreadMessages.Count + " Unread Messages ...... storing them .... Just a sec\n");
-                        Log.Debug("Found "+unreadMessages.Count);
+                        Log.Debug("Found " + unreadMessages.Count);
                     }
                     foreach (var message in unreadMessages)
                     {
                         WriteMessageToFileWIthHelpOfSmtp(message.Value);
                         var files = ReadAllEmlFiles();
-                        Log.Debug("Attempting To Save Message with ID :- "+message.Key);
+                        Log.Debug("Attempting To Save Message with ID :- " + message.Key);
                         if (files.Length > 0)
                         {
                             var fileToRead = files.First();
                             var trialMessage = new KeyValuePair<uint, MailMessage>(12, InitiateSampleMailMessage());
                             //SaveDataToBizagi(fileToRead, trialMessage.Value.Subject);
-                            SaveDataToBizagi(fileToRead, message.Value.Subject);
+                            SaveDataToBizagi(fileToRead, message.Value.Subject, message.Value.Body);
                             DeleteFile(fileToRead);
                             client.SetMessageFlags(message.Key, null, MessageFlag.Seen);
                             Log.Debug("Saved Message with ID :- " + message.Key);
@@ -98,7 +100,7 @@ namespace BizagiEmailParser
                         if (newMessageSatisfiesCondition)
                         {
                             Log.Debug("Recieved New Filtered Message");
-                            Log.Debug("Attempting to save message Id :- "+newMessageUint+" in a file");
+                            Log.Debug("Attempting to save message Id :- " + newMessageUint + " in a file");
                             WriteMessageToFileWIthHelpOfSmtp(msg);
                             Log.Debug("Saved Message  Id :- " + newMessageUint + " in a file successfully");
                             var files = ReadAllEmlFiles();
@@ -108,7 +110,7 @@ namespace BizagiEmailParser
                                 var fileToRead = files.First();
                                 var trialMessage = InitiateSampleMailMessage();
                                 //SaveDataToBizagi(fileToRead, trialMessage.Subject);
-                                SaveDataToBizagi(fileToRead, msg.Subject);
+                                SaveDataToBizagi(fileToRead, msg.Subject, msg.Body);
                                 client.SetMessageFlags(newMessageUint, null, MessageFlag.Seen);
                                 Log.Debug("Saved in bizagi successfully messageId:- " + newMessageUint);
                                 DeleteFile(fileToRead);
@@ -150,34 +152,49 @@ namespace BizagiEmailParser
             string fileBytes = ConvertToBase64(fileNameWithPath);
             string fileName = fileNameWithPath.Split('\\').LastOrDefault();
             string bizagiUrl = ConfigurationManager.AppSettings["BizagiUrl"];
-            if(string.IsNullOrEmpty(fileName))
+            if (string.IsNullOrEmpty(fileName))
                 fileName = "EmailAttachment.eml";
-            List<KeyValuePair<string, string>> keyvaluepair = new List<KeyValuePair<string, string>>()
-            {
-                new KeyValuePair<string, string>(bizagiEmailSubjectColumnName, subject),
-                new KeyValuePair<string, string>(bizagiEmailBodyCOlumnName, body)
-            };
+            //string bodyFormatted = string.Format("0x{0:x16}", body);
             // Connection bizagicon = new Connection(bizagiUrl);
             WorkflowEngine bizagi = new WorkflowEngine(bizagiUrl);
+            List<KeyValuePair<string, string>> keyvaluepair = new List<KeyValuePair<string, string>>()
+                {
+                    new KeyValuePair<string, string>(bizagiEmailQuestionColumnName, subject),
+                    new KeyValuePair<string, string>(bizagiEmailCommentColumnName, body)
+                };
             try
             {
-                var jsonObject = JObject.Parse(subject);//JsonConvert.DeserializeObject(subject);
-                var caseNumber = Convert.ToString(jsonObject.GetValue("Case"));
-                var activityName = Convert.ToString(jsonObject.GetValue("Activity"));
-                if (!string.IsNullOrEmpty(caseNumber) && !string.IsNullOrEmpty(activityName))
+                //var jsonObject = JObject.Parse(subject);//JsonConvert.DeserializeObject(subject);
+                //var caseNumber = Convert.ToString(jsonObject.GetValue("Case"));
+                //var activityName = Convert.ToString(jsonObject.GetValue("Activity"));
+                //Change in Requirement
+                var subjectSplit = subject.Split('|').Select(x => x.Trim());
+                var caseNumber = subjectSplit.ElementAt(1);
+                var domainUsername = subjectSplit.ElementAt(2);
+                var question = subjectSplit.ElementAt(3);
+                bizagiDomain = domainUsername.Split('\\')[0] ?? bizagiDomain;
+                bizagiUserName = domainUsername.Split('\\')[1] ?? bizagiUserName;
+
+
+                if (!string.IsNullOrEmpty(caseNumber) && !string.IsNullOrEmpty(activityName) && !string.IsNullOrEmpty(caseNumber) && !string.IsNullOrEmpty(activityName))
                 {
+                    keyvaluepair = new List<KeyValuePair<string, string>>()
+                    {
+                        new KeyValuePair<string, string>(bizagiEmailQuestionColumnName, question),
+                        new KeyValuePair<string, string>(bizagiEmailCommentColumnName,  "<![CDATA["+ body +"]]>")
+                    };
                     var data = bizagi.UpdateCase(bizagiUserName, bizagiDomain, bizagiProcessName, caseNumber, activityName, bizagiEntityName, keyvaluepair, bizagiEmailFileAttributeName, fileName, fileBytes);
                 }
                 else
                     throw new FormatException();
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 //It means subject is not in recognised Format .... Nothing to do here but just proceed with normal new case creation.
                 var data = bizagi.CreateCase(bizagiUserName, bizagiDomain, bizagiProcessName, bizagiEntityName, keyvaluepair, bizagiEmailFileAttributeName, fileName, fileBytes);
             }
-           
-            
+
+
         }
 
         public static string ConvertToBase64(string file)
@@ -214,7 +231,7 @@ namespace BizagiEmailParser
             }
         }
 
-        
+
         static SearchCondition GetSearchCondition()
         {
             return SearchCondition.From(readMessagesFilterAccount).And(SearchCondition.Unseen());
